@@ -91,6 +91,74 @@ public class NetworkSimulator {
                 }
             }
         }
+
+        System.out.println("Successfully added node to network node, displaying node ID: "+newNode.getNodeInformation().getNODE_ID());
+    }
+
+    public Node findNode(int NODE_ID)
+    {
+        for(Node node : nodes)
+        {
+            if(node.getNodeInformation().getNODE_ID() == NODE_ID)
+            {
+                return node;
+            }
+        }
+
+        return null;
+    }
+
+    public void removeNode(int NODE_ID)
+    {
+        Node nodeToDelete = findNode(NODE_ID);
+        if (nodeToDelete == null) {
+            System.out.println("Node ID " + NODE_ID + " not found in network.");
+            return;
+        }
+
+        // Delete the node
+        nodes.remove(nodeToDelete);
+
+        // Update Routing Tables of All Remaining Nodes
+        for (Node node : nodes) {
+            Map<Integer, List<Node>> routingTable = node.getRoutingTable();
+
+            for (Iterator<Map.Entry<Integer, List<Node>>> iterator = routingTable.entrySet().iterator(); iterator.hasNext(); ) {
+                Map.Entry<Integer, List<Node>> entry = iterator.next();
+                List<Node> nodeList = entry.getValue();
+
+                nodeList.removeIf(n -> n.getNodeInformation().getNODE_ID() == NODE_ID);
+
+                // If the list becomes empty, remove the key to keep routing table clean
+                if (nodeList.isEmpty()) {
+                    iterator.remove();
+                }
+            }
+        }
+
+        // Redistribute Hash Table
+        Map<String, Integer> table = nodeToDelete.getHashTable();
+        for(Map.Entry<String, Integer> entry : table.entrySet())
+        {
+            int key = entry.getValue();
+            addKey(key);
+        }
+
+        System.out.println("Successfully redistributed hash table");
+    }
+
+    public void addKey(int key)
+    {
+        Node node = nodes.get(0);
+        Node nearestNode = node.findNearestNode(key);
+        if (nearestNode != null) {
+            System.out.println("Nearest node to value " + key + " found by Node ID " + node.getNodeInformation().getNODE_ID() +
+                    " is Node ID " + nearestNode.getNodeInformation().getNODE_ID());
+
+            nearestNode.addValue(key);
+        } else {
+            System.out.println("No nearest node found.");
+        }
     }
 
     public int findKey(int searchKey)
@@ -98,6 +166,7 @@ public class NetworkSimulator {
         Node node = nodes.get(0);
         return node.findValue(searchKey, new HashSet<Integer>());
     }
+
     public List<Node> getNodes() {
         return nodes;
     }

@@ -96,6 +96,11 @@ public class Node {
         }
     }
 
+    public Map<String, Integer> getHashTable()
+    {
+        return hashTable;
+    }
+
     public Map<Integer, List<Node>> getRoutingTable()
     {
         return routingTable;

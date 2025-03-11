@@ -83,14 +83,26 @@ public class Test {
     // Simulate removing a node and verifying consistency
     private static void testNodeRemoval(NetworkSimulator simulator) {
         List<Node> nodes = simulator.getNodes();
+
         if (nodes.size() < 2) {
-            System.out.println("Not enough nodes to test removal.");
+            System.out.println("❌ Not enough nodes to test removal.");
             return;
         }
 
-        Node nodeToRemove = nodes.get(0);
-        System.out.println("\nRemoving Node ID: " + nodeToRemove.getNodeInformation().getNODE_ID());
-        simulator.getNodes().remove(nodeToRemove);
+        // Select a random node to remove
+        Node nodeToRemove = nodes.get(new Random().nextInt(nodes.size()));
+        int nodeID = nodeToRemove.getNodeInformation().getNODE_ID();
+
+        System.out.println("\nRemoving Node ID: " + nodeID);
+        simulator.removeNode(nodeID);
+
+        // Verify if node still exists in the network
+        int foundID = simulator.findKey(nodeID);
+        if (foundID == -1) {
+            System.out.println("✅ Node ID " + nodeID + " successfully removed.");
+        } else {
+            System.out.println("❌ Node ID " + nodeID + " still found after removal!");
+        }
 
         System.out.println("\nVerifying routing tables after removal...");
         displayRoutingTables(simulator);
