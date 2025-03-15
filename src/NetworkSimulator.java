@@ -2,7 +2,7 @@ import java.util.*;
 
 public class NetworkSimulator {
     private List<Node> nodes;
-    private final int NUM_NODES = 8;
+    private final int NUM_NODES = 30;
     private final Random random = new Random();
 
     private static final int K_BUCKET_SIZE = 3;
@@ -10,7 +10,7 @@ public class NetworkSimulator {
     public NetworkSimulator()
     {
         nodes = new ArrayList<>();
-        initializeNodes();
+        //initializeNodes();
     }
 
     private void initializeNodes() {
@@ -22,6 +22,12 @@ public class NetworkSimulator {
             System.out.println("Created node: " + ip + ":" + port + " with ID " + nodeId);
         }
     }
+
+    public boolean nodeExists(int NODE_ID)
+    {
+        return nodes.stream().anyMatch(node -> node.getNodeInformation().getNODE_ID() == NODE_ID);
+    }
+
 
     public void addNode(String IP, int UDP_PORT, int NODE_ID) {
         Node newNode = new Node(IP, UDP_PORT, NODE_ID);

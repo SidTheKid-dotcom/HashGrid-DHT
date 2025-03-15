@@ -1,11 +1,7 @@
-import java.util.HashMap;
-import java.util.Map;
-import java.util.List;
-import java.util.ArrayList;
+import java.util.*;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.Formatter;
-import java.util.Set;
+
 public class Node {
     private Map<String, Integer> hashTable;
     private Map<Integer, List<Node>> routingTable;
@@ -159,7 +155,7 @@ public class Node {
         {
             Integer key = entry.getKey();
             List<Node> tripletList = entry.getValue();
-            //System.out.println(key+": ");
+            System.out.println(key+": ");
             for(Node node : tripletList)
             {
                 node.getNodeInformation().display();
@@ -176,7 +172,7 @@ public class Node {
             for(Node nearby_node : entry.getValue())
             {
                 int curr_xor = value ^ nearby_node.getNodeInformation().getNODE_ID();
-                if(curr_xor < min_xor)
+                if(curr_xor <= min_xor)
                 {
                     min_xor = curr_xor;
                     nearest_node = nearby_node;
@@ -186,4 +182,52 @@ public class Node {
 
         return nearest_node;
     }
+
+    public List<Node> findKClosestNodesToNode(int k) {
+        int targetID = node_information.getNODE_ID();
+        Node targetNode = getSelfNode();
+
+        PriorityQueue<Node> minHeap = new PriorityQueue<>(Comparator.comparingInt(
+                node -> targetID ^ node.getNodeInformation().getNODE_ID()
+        ));
+
+        // Add all nodes from the routing table to the priority queue
+        for (List<Node> bucket : routingTable.values()) {
+            for (Node node : bucket) {
+                if (!node.equals(targetNode)) { // Avoid adding itself
+                    minHeap.offer(node);
+                }
+            }
+        }
+
+        // Extract the k closest nodes
+        List<Node> kClosestNodes = new ArrayList<>();
+        while (!minHeap.isEmpty() && kClosestNodes.size() < k) {
+            kClosestNodes.add(minHeap.poll());
+        }
+
+        return kClosestNodes;
+    }
+
+    public List<Node> findKClosestNodesToValue(int value, int k) {
+        PriorityQueue<Node> minHeap = new PriorityQueue<>(Comparator.comparingInt(
+                node -> value ^ node.getNodeInformation().getNODE_ID()
+        ));
+
+        // Add all nodes from routing table to the priority queue
+        for (List<Node> bucket : routingTable.values()) {
+            for (Node node : bucket) {
+                minHeap.offer(node);
+            }
+        }
+
+        // Extract the k closest nodes
+        List<Node> kClosestNodes = new ArrayList<>();
+        while (!minHeap.isEmpty() && kClosestNodes.size() < k) {
+            kClosestNodes.add(minHeap.poll());
+        }
+
+        return kClosestNodes;
+    }
+
 }
