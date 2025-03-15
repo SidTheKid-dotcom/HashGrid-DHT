@@ -9,7 +9,8 @@ import java.util.Set;
 public class Node {
     private Map<String, Integer> hashTable;
     private Map<Integer, List<Node>> routingTable;
-
+    private static final int K_BUCKET_SIZE = 3;
+    private static final int BUCKET_COUNT = 32;
     public Triplet node_information;
 
     public Node()
@@ -23,6 +24,11 @@ public class Node {
         node_information = new Triplet(IP_ADDR, UDP_PORT, NODE_ID);
         hashTable = new HashMap<>();
         routingTable = new HashMap<>();
+    }
+
+    public Node getSelfNode()
+    {
+        return this;
     }
 
     public Triplet getNodeInformation()
@@ -84,9 +90,35 @@ public class Node {
         return -1;
     }
 
-    public void addToRoutingTable(Integer key, Node neighbor) {
-        routingTable.computeIfAbsent(key, k -> new ArrayList<>()).add(neighbor);
+    public void addToRoutingTable(Node neighbor) {
+        int bucketIndex = getBucketIndex(neighbor.getNodeInformation().getNODE_ID());
+
+        // Get the bucket
+        List<Node> bucket = routingTable.computeIfAbsent(bucketIndex, k -> new ArrayList<>());
+
+        // Prevent duplicate entries
+        for (Node n : bucket) {
+            if (n.getNodeInformation().getNODE_ID() == neighbor.getNodeInformation().getNODE_ID()) {
+                return;
+            }
+        }
+
+        if (bucket.size() < K_BUCKET_SIZE) {
+            bucket.add(neighbor);
+        } else {
+            // Replacement strategy: Remove the oldest node (FIFO)
+            bucket.remove(0);
+            bucket.add(neighbor);
+        }
     }
+
+    public void removeFromRoutingTable(int NODE_ID)
+    {
+        int bucketIndex = getBucketIndex(NODE_ID);
+        List<Node> bucket = routingTable.computeIfAbsent(bucketIndex, k -> new ArrayList<>());
+        bucket.removeIf(node -> node.getNodeInformation().getNODE_ID() == NODE_ID);
+    }
+
 
     public void displayHashTable()
     {
@@ -106,6 +138,15 @@ public class Node {
         return routingTable;
     }
 
+    public int getBucketIndex(int nodeID) {
+        int xorDistance = node_information.getNODE_ID() ^ nodeID;
+
+        // Avoid log(0) issue: If the XOR distance is 0, return the highest bucket
+        if (xorDistance == 0) return BUCKET_COUNT - 1;
+
+        // Compute bucket index as log2(xorDistance)
+        return BUCKET_COUNT - 1 - Integer.numberOfLeadingZeros(xorDistance);
+    }
     public void displayRoutingTable()
     {
         if(routingTable.size() == 0)
@@ -128,8 +169,8 @@ public class Node {
 
     public Node findNearestNode(int value)
     {
-        int min_xor = Integer.MAX_VALUE;
-        Node nearest_node = null;
+        int min_xor = value ^ node_information.getNODE_ID();
+        Node nearest_node = getSelfNode();
         for(Map.Entry<Integer, List<Node>> entry : routingTable.entrySet())
         {
             for(Node nearby_node : entry.getValue())
