@@ -1,7 +1,6 @@
 import java.util.*;
 import java.io.IOException;
 import java.net.DatagramSocket;
-import java.net.InetAddress;
 
 public class NetworkSimulator {
     private final List<Node> nodes;
@@ -175,10 +174,8 @@ public class NetworkSimulator {
         List<Triplet> closestNodes = startNode.findNode(key);
 
         if (!closestNodes.isEmpty()) {
-            // Get the closest node to the key
             Triplet closestNodeInfo = closestNodes.get(0);
 
-            // Find the actual node object
             Node targetNode = nodes.stream()
                     .filter(n -> n.getNodeInformation().getNODE_ID() == closestNodeInfo.getNODE_ID())
                     .findFirst()
@@ -201,7 +198,6 @@ public class NetworkSimulator {
             return -1;
         }
 
-        // Any node can initiate the search
         Node startNode = nodes.get(0);
         return startNode.findKey(searchKey);
     }
@@ -210,13 +206,11 @@ public class NetworkSimulator {
         return nodes;
     }
 
-    // Method to refresh routing tables by having nodes ping their k closest peers
     public void refreshRoutingTables() {
         for (Node node : nodes) {
             node.sendPingKClosest();
         }
 
-        // Give time for pings to be processed
         try {
             Thread.sleep(1000);
         } catch (InterruptedException e) {
@@ -293,8 +287,10 @@ public class NetworkSimulator {
 
     // Shutdown the simulator and close all resources
     public void shutdown() {
-        // Implement proper socket closure for all nodes
-        // For now, we'll rely on the JVM to close resources
+        for(Node node : nodes)
+        {
+            node.close();
+        }
         System.out.println("Shutting down simulator with " + nodes.size() + " nodes");
         nodes.clear();
     }

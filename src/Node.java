@@ -120,11 +120,9 @@ public class Node {
             int callerPort = Integer.parseInt(parts[3]);
             int callerNodeID = Integer.parseInt(parts[4]);
 
-            // Add the sender to our routing table
             Triplet callerNodeInfo = new Triplet(callerIP, callerPort, callerNodeID);
             addToRoutingTable(callerNodeInfo);
 
-            // Generate SHA-1 hash of the key
             String hash = generateSHA1(String.valueOf(searchKey));
 
             // Check if we have the key locally
