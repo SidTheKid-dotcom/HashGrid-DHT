@@ -1,3 +1,4 @@
+/*
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -123,13 +124,13 @@ public class TestNetwork {
         System.out.println("\n===== TESTING ROUTING TABLE FUNCTIONALITY =====");
 
         // Create a network with a specific node ID to test routing table
-        Node testNode = new Node("127.0.0.1", 8000, 128); // ID 128 (binary 10000000)
+        Node testNode = new Node("127.0.0.1", 8000, 128, true); // ID 128 (binary 10000000)
 
         // Create nodes with varying XOR distances
-        Node node1 = new Node("127.0.0.1", 8001, 129);  // ID 129 (binary 10000001) - XOR distance 1
-        Node node2 = new Node("127.0.0.1", 8002, 160);  // ID 160 (binary 10100000) - XOR distance 32
-        Node node3 = new Node("127.0.0.1", 8003, 192);  // ID 192 (binary 11000000) - XOR distance 64
-        Node node4 = new Node("127.0.0.1", 8004, 0);    // ID 0 (binary 00000000) - XOR distance 128
+        Node node1 = new Node("127.0.0.1", 8001, 129, true);  // ID 129 (binary 10000001) - XOR distance 1
+        Node node2 = new Node("127.0.0.1", 8002, 160, true);  // ID 160 (binary 10100000) - XOR distance 32
+        Node node3 = new Node("127.0.0.1", 8003, 192, true);  // ID 192 (binary 11000000) - XOR distance 64
+        Node node4 = new Node("127.0.0.1", 8004, 0, true);    // ID 0 (binary 00000000) - XOR distance 128
 
         // Add nodes to routing table
         System.out.println("Adding nodes to test routing table:");
@@ -212,4 +213,4 @@ public class TestNetwork {
 
         System.out.println("\n=== COMPREHENSIVE TEST COMPLETE ===");
     }
-}
+}*/

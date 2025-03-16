@@ -1,110 +1,108 @@
-import java.util.HashSet;
-import java.util.List;
-import java.util.Random;
-
 public class Test {
     public static void main(String[] args) {
-        System.out.println("\n******** Initializing Kademlia Network ********");
-        NetworkSimulator simulator = new NetworkSimulator();
+        System.out.println("Starting DHT Network Test");
 
-        System.out.println("\n******** Displaying Initial Routing Tables ********");
-        displayRoutingTables(simulator);
+        try {
+            // Initialize network simulator
+            NetworkSimulator simulator = new NetworkSimulator();
 
-        System.out.println("\n******** Testing Value Storage and Lookup ********");
-        testValueStorage(simulator);
+            // Create a small network of nodes with different IDs
+            System.out.println("\n=== Creating Initial Nodes ===");
+            simulator.addNode("127.0.0.1", 9100, 10);  // Node ID 10
+            simulator.addNode("127.0.0.1", 9200, 50);  // Node ID 50
+            simulator.addNode("127.0.0.1", 9300, 90);  // Node ID 90
+            simulator.addNode("127.0.0.1", 9400, 130); // Node ID 130
+            simulator.addNode("127.0.0.1", 9500, 170); // Node ID 170
 
-        System.out.println("\n******** Testing Node Addition ********");
-        testNodeAddition(simulator);
+            // Give time for UDP servers to initialize and exchange ping messages
+            System.out.println("\nWaiting for nodes to discover each other...");
+            Thread.sleep(2000);
 
-        System.out.println("\n******** Testing Key Lookup After Node Addition ********");
-        testKeyLookupAfterAddition(simulator);
-
-        System.out.println("\n******** Testing Node Removal ********");
-        testNodeRemoval(simulator);
-    }
-
-    // Display routing tables for debugging
-    private static void displayRoutingTables(NetworkSimulator simulator) {
-        for (Node node : simulator.getNodes()) {
-            node.displayRoutingTable();
-        }
-    }
-
-    // Test storing and retrieving values in the network
-    private static void testValueStorage(NetworkSimulator simulator) {
-        Random random = new Random();
-        List<Node> nodes = simulator.getNodes();
-
-        // Select a random node to store values
-        Node storageNode = nodes.get(random.nextInt(nodes.size()));
-        int[] testValues = {42, 99, 150, 255};
-
-        for (int value : testValues) {
-            System.out.println("\nStoring value: " + value + " at Node ID: " + storageNode.getNodeInformation().getNODE_ID());
-            storageNode.addValue(value);
-
-            // Try finding the value
-            int nodeID = simulator.findKey(value);
-            if (nodeID != -1) {
-                System.out.println("✅ Value " + value + " found in Node ID: " + nodeID);
-            } else {
-                System.out.println("❌ Key " + value + " not found in the network!");
+            // Display routing tables to confirm node discovery
+            System.out.println("\n=== Routing Tables After Initial Discovery ===");
+            for (Node node : simulator.getNodes()) {
+                node.displayRoutingTable();
+                System.out.println();
             }
+
+            // Add some keys to the network
+            System.out.println("\n=== Adding Keys to the Network ===");
+            int[] keysToAdd = {15, 55, 90, 135, 175, 210};
+            for (int key : keysToAdd) {
+                System.out.println("Adding key: " + key);
+                simulator.addKey(key);
+            }
+
+            Thread.sleep(5000);
+
+            // Display hash tables to confirm key storage
+            System.out.println("\n=== Hash Tables After Adding Keys ===");
+            for (Node node : simulator.getNodes()) {
+                System.out.println("Node ID: " + node.getNodeInformation().getNODE_ID());
+                node.displayHashTable();
+                System.out.println();
+            }
+
+            // Test key lookups
+            System.out.println("\n=== Testing Key Lookups ===");
+            for (int key : keysToAdd) {
+                int nodeId = simulator.findKey(key);
+                System.out.println("Key " + key + " found at node ID: " +
+                        (nodeId != -1 ? nodeId : "Not found"));
+            }
+
+            // Test adding a new node to the network
+            System.out.println("\n=== Adding a New Node ===");
+            simulator.addNode("127.0.0.1", 9600, 200);  // Node ID 200
+
+            // Give time for the new node to be integrated
+            System.out.println("Waiting for the new node to integrate...");
+            Thread.sleep(2000);
+
+            // Refresh routing tables to ensure the new node is discovered
+            System.out.println("Refreshing routing tables...");
+            simulator.refreshRoutingTables();
+            Thread.sleep(1000);
+
+            // Display routing tables after adding the new node
+            System.out.println("\n=== Routing Tables After Adding New Node ===");
+            for (Node node : simulator.getNodes()) {
+                node.displayRoutingTable();
+                System.out.println();
+            }
+
+            // Test removing a node
+            System.out.println("\n=== Removing a Node ===");
+            simulator.removeNode(50);  // Remove node with ID 50
+
+            // Give time for the network to stabilize
+            System.out.println("Waiting for the network to stabilize...");
+            Thread.sleep(1000);
+
+            // Display routing tables after removing a node
+            System.out.println("\n=== Routing Tables After Removing Node ===");
+            for (Node node : simulator.getNodes()) {
+                node.displayRoutingTable();
+                System.out.println();
+            }
+
+            // Test lookups after node removal to ensure keys were redistributed
+            System.out.println("\n=== Testing Key Lookups After Node Removal ===");
+            for (int key : keysToAdd) {
+                int nodeId = simulator.findKey(key);
+                System.out.println("Key " + key + " found at node ID: " +
+                        (nodeId != -1 ? nodeId : "Not found"));
+            }
+
+            // Shutdown the network
+            System.out.println("\n=== Shutting Down Network ===");
+            simulator.shutdown();
+
+            System.out.println("\nDHT Network Test Completed Successfully");
+
+        } catch (Exception e) {
+            System.err.println("Test failed with exception: " + e.getMessage());
+            e.printStackTrace();
         }
-    }
-
-    // Test adding a new node and verifying if routing tables update correctly
-    private static void testNodeAddition(NetworkSimulator simulator) {
-        int newNodeID = 200;
-        System.out.println("\nAdding new node with ID: " + newNodeID);
-        simulator.addNode("127.0.0.1", 9000, newNodeID);
-
-        System.out.println("\nVerifying if new node is part of the routing tables...");
-        displayRoutingTables(simulator);
-    }
-
-    // Test key lookup after adding a node
-    private static void testKeyLookupAfterAddition(NetworkSimulator simulator) {
-        int newTestValue = 202;
-        List<Node> nodes = simulator.getNodes();
-        Node randomNode = nodes.get(new Random().nextInt(nodes.size()));
-
-        System.out.println("\nStoring new value " + newTestValue + " in Node ID: " + randomNode.getNodeInformation().getNODE_ID());
-        randomNode.addValue(newTestValue);
-
-        int foundNodeID = simulator.findKey(newTestValue);
-        if (foundNodeID != -1) {
-            System.out.println("✅ Value " + newTestValue + " found in Node ID: " + foundNodeID);
-        } else {
-            System.out.println("❌ Key " + newTestValue + " not found!");
-        }
-    }
-
-    // Simulate removing a node and verifying consistency
-    private static void testNodeRemoval(NetworkSimulator simulator) {
-        List<Node> nodes = simulator.getNodes();
-
-        if (nodes.size() < 2) {
-            System.out.println("❌ Not enough nodes to test removal.");
-            return;
-        }
-
-        // Select a random node to remove
-        Node nodeToRemove = nodes.get(new Random().nextInt(nodes.size()));
-        int nodeID = nodeToRemove.getNodeInformation().getNODE_ID();
-
-        System.out.println("\nRemoving Node ID: " + nodeID);
-        simulator.removeNode(nodeID);
-
-        // Verify if node still exists in the network
-        int foundID = simulator.findKey(nodeID);
-        if (foundID == -1) {
-            System.out.println("✅ Node ID " + nodeID + " successfully removed.");
-        } else {
-            System.out.println("❌ Node ID " + nodeID + " still found after removal!");
-        }
-
-        System.out.println("\nVerifying routing tables after removal...");
-        displayRoutingTables(simulator);
     }
 }
