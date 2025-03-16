@@ -34,10 +34,17 @@ public class Node {
             try {
                 socket = new DatagramSocket(node_information.getUDP_PORT());
                 byte[] buffer = new byte[BUFFER_SIZE];
-                while (true) {
-                    DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-                    socket.receive(packet);
-                    handleIncomingPacket(packet);
+                while (!Thread.currentThread().isInterrupted() && !socket.isClosed()) {
+                    try {
+                        DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                        socket.receive(packet);
+                        handleIncomingPacket(packet);
+                    } catch (SocketException e) {
+                        // Socket closed, break the loop
+                        break;
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
                 }
             } catch (IOException e) {
                 e.printStackTrace();
@@ -77,6 +84,35 @@ public class Node {
             Triplet receivedNodeInfo = new Triplet(incomingIP, incomingPort, incomingNodeID);
             addToRoutingTable(receivedNodeInfo);
         }
+        // Add this to your handleIncomingPacket method
+        else if (message.startsWith("FIND_NODE")) {
+            String[] parts = message.split(" ");
+            int targetNodeId = Integer.parseInt(parts[1]);
+            String callerIP = parts[2];
+            int callerPort = Integer.parseInt(parts[3]);
+            int callerNodeID = Integer.parseInt(parts[4]);
+
+            // Add the sender to our routing table
+            Triplet callerNodeInfo = new Triplet(callerIP, callerPort, callerNodeID);
+            addToRoutingTable(callerNodeInfo);
+
+            // Find k closest nodes to the target node ID
+            List<Triplet> closestNodes = findKClosestNodesForKeyFromSelf(targetNodeId, K_BUCKET_SIZE);
+
+            StringBuilder responseBuilder = new StringBuilder("CLOSEST_NODES");
+            for (Triplet node : closestNodes) {
+                responseBuilder.append(" ").append(node.getIP_ADDR())
+                        .append(" ").append(node.getUDP_PORT())
+                        .append(" ").append(node.getNODE_ID());
+            }
+
+            String response = responseBuilder.toString();
+            DatagramPacket responsePacket = new DatagramPacket(
+                    response.getBytes(), response.length(),
+                    senderAddress, senderPort
+            );
+            socket.send(responsePacket);
+        }
         else if (message.startsWith("FIND_KEY")) {
             String[] parts = message.split(" ");
             int searchKey = Integer.parseInt(parts[1]);
@@ -102,7 +138,7 @@ public class Node {
                 socket.send(responsePacket);
             } else {
                 // We don't have the key, send our k-closest nodes
-                List<Triplet> closestNodes = findKClosestNodesToNode(K_BUCKET_SIZE);
+                List<Triplet> closestNodes = findKClosestNodesToSelf(K_BUCKET_SIZE);
 
                 StringBuilder responseBuilder = new StringBuilder("CLOSEST_NODES");
                 for (Triplet node : closestNodes) {
@@ -118,6 +154,15 @@ public class Node {
                 );
                 socket.send(responsePacket);
             }
+        }
+        else if (message.startsWith("GOODBYE")) {
+            String[] parts = message.split(" ");
+            String callerIP = parts[1];
+            int callerPort = Integer.parseInt(parts[2]);
+            int callerNodeID = Integer.parseInt(parts[3]);
+
+            // Add the sender to our routing table
+            removeFromRoutingTable(callerNodeID);
         }
     }
 
@@ -136,23 +181,95 @@ public class Node {
     }
 
     public void sendPingKClosest() {
-        try {
-            DatagramSocket pingSocket = new DatagramSocket();
+        try (DatagramSocket pingSocket = new DatagramSocket()) {
+            List<Triplet> KClosestNodes = findKClosestNodesToSelf(3);
+            Set<Integer> unresponsiveNodes = new HashSet<>();
 
-            List<Triplet> KClosestNodes = findKClosestNodesToNode(3);
+            for (Triplet targetNodeInfo : KClosestNodes) {
+                try {
+                    // Send PING message
+                    String message = "PING" + " " + node_information.getIP_ADDR() + " " + node_information.getUDP_PORT() + " " + node_information.getNODE_ID();;
+                    byte[] buffer = message.getBytes();
+                    DatagramPacket packet = new DatagramPacket(buffer, buffer.length,
+                            InetAddress.getByName(targetNodeInfo.getIP_ADDR()), targetNodeInfo.getUDP_PORT());
+                    pingSocket.send(packet);
 
-            for(Triplet targetNodeInfo : KClosestNodes)
-            {
-                String message = "PING" + " " + targetNodeInfo.getIP_ADDR() + " " + targetNodeInfo.getUDP_PORT() + " " + targetNodeInfo.getNODE_ID();
-                byte[] buffer = message.getBytes();
-                DatagramPacket packet = new DatagramPacket(buffer, buffer.length,
-                        InetAddress.getByName(targetNodeInfo.getIP_ADDR()), targetNodeInfo.getUDP_PORT());
-                pingSocket.send(packet);
+                    // Wait for response
+                    pingSocket.setSoTimeout(2000); // 2-second timeout
+                    byte[] responseBuffer = new byte[1024];
+                    DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
+
+                    pingSocket.receive(responsePacket);
+                    String response = new String(responsePacket.getData(), 0, responsePacket.getLength()).trim();
+
+                    // Check if response is a valid PONG
+                    if (!response.equals("PONG " + targetNodeInfo.getNODE_ID())) {
+                        unresponsiveNodes.add(targetNodeInfo.getNODE_ID());
+                    }
+                } catch (SocketTimeoutException e) {
+                    System.out.println("No response from Node ID: " + targetNodeInfo.getNODE_ID() + " - Removing from routing table.");
+                    unresponsiveNodes.add(targetNodeInfo.getNODE_ID());
+                }
             }
-            pingSocket.close();
+
+            // Remove unresponsive nodes from the routing table
+            for (Integer nodeId : unresponsiveNodes) {
+                removeFromRoutingTable(nodeId);
+            }
+
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    private List<Triplet> sendFindNodeRequest(Triplet targetNode, int targetNodeId) {
+        List<Triplet> returnedNodes = new ArrayList<>();
+        try {
+            DatagramSocket findNodeSocket = new DatagramSocket();
+            String message = "FIND_NODE " + targetNodeId + " " +
+                    node_information.getIP_ADDR() + " " +
+                    node_information.getUDP_PORT() + " " +
+                    node_information.getNODE_ID();
+
+            byte[] buffer = message.getBytes();
+            DatagramPacket packet = new DatagramPacket(buffer, buffer.length,
+                    InetAddress.getByName(targetNode.getIP_ADDR()),
+                    targetNode.getUDP_PORT());
+            findNodeSocket.send(packet);
+
+            // Set timeout for response
+            findNodeSocket.setSoTimeout(5000); // 5 seconds timeout
+
+            // Prepare to receive response
+            byte[] responseBuffer = new byte[BUFFER_SIZE];
+            DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
+            findNodeSocket.receive(responsePacket);
+
+            String response = new String(responsePacket.getData(), 0, responsePacket.getLength());
+            findNodeSocket.close();
+
+            // Parse the response
+            if (response.startsWith("CLOSEST_NODES")) {
+                String[] parts = response.split(" ");
+                for (int i = 1; i < parts.length; i += 3) {
+                    if (i + 2 < parts.length) {
+                        String ip = parts[i];
+                        int port = Integer.parseInt(parts[i + 1]);
+                        int nodeId = Integer.parseInt(parts[i + 2]);
+                        Triplet nodeInfo = new Triplet(ip, port, nodeId);
+                        returnedNodes.add(nodeInfo);
+
+                        // Also add to routing table
+                        addToRoutingTable(nodeInfo);
+                    }
+                }
+            }
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        return returnedNodes;
     }
 
     public int sendFindKey(Triplet targetNode, int searchKey) {
@@ -195,6 +312,22 @@ public class Node {
         }
     }
 
+    public void sendGoodbyeMessage(Triplet targetNode) {
+        try {
+            DatagramSocket goodbyeSocket = new DatagramSocket();
+            String message = "GOODBYE " + node_information.getIP_ADDR() + " " +
+                    node_information.getUDP_PORT() + " " + node_information.getNODE_ID();
+            byte[] buffer = message.getBytes();
+            DatagramPacket packet = new DatagramPacket(buffer, buffer.length,
+                    InetAddress.getByName(targetNode.getIP_ADDR()),
+                    targetNode.getUDP_PORT());
+            goodbyeSocket.send(packet);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+
     public Node getSelfNode()
     {
         return this;
@@ -224,13 +357,69 @@ public class Node {
         }
     }
 
-    public void addKey(int value)
-    {
-        String hash = generateSHA1(String.valueOf(value));
-        hashTable.put(hash, value);
+    public List<Triplet> findNode(int targetNodeId) {
+        // Initialize seen nodes and closest nodes
+        Set<Integer> queriedNodes = new HashSet<>();
+        Set<Integer> seenNodes = new HashSet<>();
+
+        // Add self to queried set
+        queriedNodes.add(node_information.getNODE_ID());
+
+        // Start with k closest nodes from our own routing table
+        List<Triplet> closestNodes = findKClosestNodesForKeyFromSelf(targetNodeId, K_BUCKET_SIZE);
+        for (Triplet node : closestNodes) {
+            seenNodes.add(node.getNODE_ID());
+        }
+
+        // Continue until we've queried all nodes or found the target
+        boolean improved = true;
+        while (improved) {
+            improved = false;
+
+            // Sort nodes by XOR distance to targetNodeId
+            closestNodes.sort(Comparator.comparingInt(node -> targetNodeId ^ node.getNODE_ID()));
+
+            // Create a list of nodes to query in this round
+            List<Triplet> nodesToQuery = new ArrayList<>();
+            for (Triplet node : closestNodes) {
+                if (!queriedNodes.contains(node.getNODE_ID())) {
+                    nodesToQuery.add(node);
+                    if (nodesToQuery.size() >= K_BUCKET_SIZE) break;
+                }
+            }
+
+            if (nodesToQuery.isEmpty()) {
+                break; // No more nodes to query
+            }
+
+            // Query each node
+            for (Triplet nodeToQuery : nodesToQuery) {
+                queriedNodes.add(nodeToQuery.getNODE_ID());
+
+                // Send FIND_NODE request
+                List<Triplet> returnedNodes = sendFindNodeRequest(nodeToQuery, targetNodeId);
+
+                // Process returned nodes
+                for (Triplet returnedNode : returnedNodes) {
+                    if (!seenNodes.contains(returnedNode.getNODE_ID())) {
+                        seenNodes.add(returnedNode.getNODE_ID());
+                        closestNodes.add(returnedNode);
+                        improved = true;
+                    }
+                }
+            }
+
+            // Keep only the k closest nodes
+            if (closestNodes.size() > K_BUCKET_SIZE) {
+                closestNodes.sort(Comparator.comparingInt(node -> targetNodeId ^ node.getNODE_ID()));
+                closestNodes = closestNodes.subList(0, K_BUCKET_SIZE);
+            }
+        }
+
+        return closestNodes;
     }
 
-    public int startFindKey(int searchKey) {
+    public int findKey(int searchKey) {
         // Generate SHA-1 hash of the key
         String hash = generateSHA1(String.valueOf(searchKey));
 
@@ -239,49 +428,24 @@ public class Node {
             return node_information.getNODE_ID();
         }
 
-        // If not found locally, start recursive lookup
-        Set<Integer> queried = new HashSet<>();
-        List<Triplet> closestNodes = findKClosestNodesToValue(searchKey, K_BUCKET_SIZE);
+        // If not found locally, find the closest nodes to the key
+        List<Triplet> closestNodes = findNode(searchKey);
 
-        // Clone the list to avoid modification issues
-        List<Triplet> nodesToQuery = new ArrayList<>(closestNodes);
-
-        // Continue until we've queried all nodes or found the value
-        while (!nodesToQuery.isEmpty()) {
-            // Sort nodes by XOR distance to the key
-            nodesToQuery.sort(Comparator.comparingInt(node -> searchKey ^ node.getNODE_ID()));
-
-            // Get the closest node we haven't queried yet
-            Triplet nextNode = null;
-            for (Triplet node : nodesToQuery) {
-                if (!queried.contains(node.getNODE_ID())) {
-                    nextNode = node;
-                    break;
-                }
-            }
-
-            if (nextNode == null) {
-                // We've queried all known nodes
-                return -1;
-            }
-
-            // Mark this node as queried
-            queried.add(nextNode.getNODE_ID());
-            nodesToQuery.remove(nextNode);
-
-            // Send FIND_KEY request to the closest node
-            int result = sendFindKey(nextNode, searchKey);
-
+        // Query each of the closest nodes directly
+        for (Triplet node : closestNodes) {
+            int result = sendFindKey(node, searchKey);
             if (result >= 0) {
-                // Key found at node with ID = result
-                return result;
+                return result; // Key found at node with ID = result
             }
-
-            // If we received k-closest nodes, we'll requery in the next iteration
         }
 
         // If we've queried all nodes and didn't find the key
         return -1;
+    }
+    public void storeKey(int key)
+    {
+        String hash = generateSHA1(String.valueOf(key));
+        hashTable.put(hash, key);
     }
 
     public void addToRoutingTable(Triplet nodeInfo) {
@@ -361,27 +525,7 @@ public class Node {
         }
     }
 
-    public Triplet findNearestNode(int value)
-    {
-        int min_xor = value ^ node_information.getNODE_ID();
-        Triplet nearest_node_info = node_information;
-        for(Map.Entry<Integer, List<Triplet>> entry : routingTable.entrySet())
-        {
-            for(Triplet nearby_nodeInfo : entry.getValue())
-            {
-                int curr_xor = value ^ nearby_nodeInfo.getNODE_ID();
-                if(curr_xor <= min_xor)
-                {
-                    min_xor = curr_xor;
-                    nearest_node_info = nearby_nodeInfo;
-                }
-            }
-        }
-
-        return nearest_node_info;
-    }
-
-    public List<Triplet> findKClosestNodesToNode(int k) {
+    public List<Triplet> findKClosestNodesToSelf(int k) {
         int targetID = node_information.getNODE_ID();
         Triplet targetNodeInfo = node_information;
 
@@ -407,9 +551,9 @@ public class Node {
         return kClosestNodes;
     }
 
-    public List<Triplet> findKClosestNodesToValue(int value, int k) {
+    public List<Triplet> findKClosestNodesForKeyFromSelf(int key, int k) {
         PriorityQueue<Triplet> minHeap = new PriorityQueue<>(Comparator.comparingInt(
-                node -> value ^ node.getNODE_ID()
+                node -> key ^ node.getNODE_ID()
         ));
 
         // Add all nodes from routing table to the priority queue
@@ -428,10 +572,20 @@ public class Node {
         return kClosestNodes;
     }
 
-    public void close()
-    {
-        if(socket != null && !socket.isClosed())
-        {
+    public void close() {
+
+        List<Triplet> closestNodes = findKClosestNodesToSelf(K_BUCKET_SIZE);
+        for (Triplet node : closestNodes) {
+            sendGoodbyeMessage(node);
+        }
+
+        try {
+            Thread.sleep(200);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        if (socket != null && !socket.isClosed()) {
             socket.close();
         }
     }

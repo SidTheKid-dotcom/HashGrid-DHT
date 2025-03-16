@@ -109,36 +109,51 @@ public class NetworkSimulator {
         return port;
     }
 
-    public Node findNode(int NODE_ID) {
-        for (Node node : nodes) {
-            if (node.getNodeInformation().getNODE_ID() == NODE_ID) {
-                return node;
-            }
+    public List<Triplet> lookupNode(int NODE_ID) {
+        if (nodes.isEmpty()) {
+            System.out.println("No nodes in the network to perform lookup.");
+            return new ArrayList<>();
         }
-        return null;
+
+        // Start the lookup from any node in the network
+        Node startNode = nodes.get(0);
+        return startNode.findNode(NODE_ID);
     }
 
     public void removeNode(int NODE_ID) {
-        Node nodeToDelete = findNode(NODE_ID);
-        if (nodeToDelete == null) {
-            System.out.println("Node ID " + NODE_ID + " not found in network.");
+        List<Triplet> closestNodes = lookupNode(NODE_ID);
+        closestNodes.removeIf(node -> node.getNODE_ID() != NODE_ID);
+
+        if (closestNodes.isEmpty()) {
+            System.out.println("Node with given Node ID: " + NODE_ID + " not found!");
             return;
         }
 
-        // Before removing the node, notify other nodes that this node is going offline
-        // This could be implemented as a GOODBYE message in the Node class
+        Triplet nodeToDeleteInfo = closestNodes.get(0);
+
+        // Find the node to delete
+        Node nodeToDelete = nodes.stream()
+                .filter(node -> node.getNodeInformation().getNODE_ID() == nodeToDeleteInfo.getNODE_ID())
+                .findFirst()
+                .orElse(null);
+
+        if (nodeToDelete == null) {
+            System.out.println("Node to delete not found in the network.");
+            return;
+        }
+
+        // Notify other nodes before deletion
+        nodeToDelete.close(); // Assuming such a method exists
 
         // Delete the node
-        nodes.remove(nodeToDelete);
+        nodes.removeIf(node -> node.getNodeInformation().getNODE_ID() == NODE_ID);
 
-        // Update Routing Tables of All Remaining Nodes
-        for (Node node : nodes) {
-            node.removeFromRoutingTable(NODE_ID);
-        }
+        refreshRoutingTables();
 
         // Redistribute Hash Table
         Map<String, Integer> table = nodeToDelete.getHashTable();
-        System.out.println("Node to delete hash table: "+table);
+        System.out.println("Node to delete hash table: " + table);
+
         for (Map.Entry<String, Integer> entry : table.entrySet()) {
             int key = entry.getValue();
             addKey(key);
@@ -153,24 +168,30 @@ public class NetworkSimulator {
             return;
         }
 
-        Node node = nodes.get(0); // Start from the first node
-        Triplet nearestNodeInfo = node.findNearestNode(key);
+        // Start from any node
+        Node startNode = nodes.get(0);
 
-        if (nearestNodeInfo != null) {
+        // Use the node lookup to find the closest nodes to the key
+        List<Triplet> closestNodes = startNode.findNode(key);
 
-            // Retrieve the actual nearest node
-            Node nearestNode = nodes.stream()
-                    .filter(n -> n.getNodeInformation().getNODE_ID() == nearestNodeInfo.getNODE_ID())
+        if (!closestNodes.isEmpty()) {
+            // Get the closest node to the key
+            Triplet closestNodeInfo = closestNodes.get(0);
+
+            // Find the actual node object
+            Node targetNode = nodes.stream()
+                    .filter(n -> n.getNodeInformation().getNODE_ID() == closestNodeInfo.getNODE_ID())
                     .findFirst()
                     .orElse(null);
 
-            if (nearestNode != null) {
-                nearestNode.addKey(key);
+            if (targetNode != null) {
+                targetNode.storeKey(key);
+                System.out.println("Key " + key + " added to node " + targetNode.getNodeInformation().getNODE_ID());
             } else {
-                System.out.println("Error: Nearest node not found in node list.");
+                System.out.println("Error: Closest node not found in node list.");
             }
         } else {
-            System.out.println("No nearest node found.");
+            System.out.println("No nodes found in the network to store the key.");
         }
     }
 
@@ -180,8 +201,9 @@ public class NetworkSimulator {
             return -1;
         }
 
-        Node node = nodes.get(0);
-        return node.startFindKey(searchKey);
+        // Any node can initiate the search
+        Node startNode = nodes.get(0);
+        return startNode.findKey(searchKey);
     }
 
     public List<Node> getNodes() {
@@ -200,6 +222,73 @@ public class NetworkSimulator {
         } catch (InterruptedException e) {
             e.printStackTrace();
         }
+    }
+    public void displayNetworkState() {
+        System.out.println("\n===== NETWORK STATE =====");
+        System.out.println("Total nodes: " + nodes.size());
+
+        // Display routing tables
+        for (Node node : nodes) {
+            System.out.println("\nNode ID: " + node.getNodeInformation().getNODE_ID());
+            System.out.println("  Hash table entries: " + node.getHashTable().size());
+
+            Map<Integer, List<Triplet>> routingTable = node.getRoutingTable();
+            System.out.println("  Routing table buckets: " + routingTable.size());
+
+            // Count total peers
+            int totalPeers = routingTable.values().stream()
+                    .mapToInt(List::size)
+                    .sum();
+            System.out.println("  Total known peers: " + totalPeers);
+        }
+        System.out.println("=======================\n");
+    }
+    public void testNetworkResilience() {
+        System.out.println("\n===== TESTING NETWORK RESILIENCE =====");
+
+        // Add some test keys
+        for (int i = 0; i < 10; i++) {
+            int testKey = random.nextInt(100);
+            addKey(testKey);
+            System.out.println("Added test key: " + testKey);
+        }
+
+        // Try to find the keys
+        for (int i = 0; i < 10; i++) {
+            int testKey = i * 10; // Some deterministic keys to search for
+            int result = findKey(testKey);
+            if (result >= 0) {
+                System.out.println("Key " + testKey + " found at node " + result);
+            } else {
+                System.out.println("Key " + testKey + " not found in network");
+            }
+        }
+
+        // Remove some random nodes and test again
+        if (nodes.size() > 5) {
+            System.out.println("\nRemoving 3 random nodes...");
+            for (int i = 0; i < 3; i++) {
+                if (!nodes.isEmpty()) {
+                    int index = random.nextInt(nodes.size());
+                    int nodeId = nodes.get(index).getNodeInformation().getNODE_ID();
+                    removeNode(nodeId);
+                }
+            }
+
+            // Test finding keys again
+            System.out.println("\nRetesting key lookup after node removal:");
+            for (int i = 0; i < 10; i++) {
+                int testKey = i * 10;
+                int result = findKey(testKey);
+                if (result >= 0) {
+                    System.out.println("Key " + testKey + " found at node " + result);
+                } else {
+                    System.out.println("Key " + testKey + " not found in network");
+                }
+            }
+        }
+
+        System.out.println("=======================\n");
     }
 
     // Shutdown the simulator and close all resources
