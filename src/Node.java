@@ -4,6 +4,9 @@ import java.security.NoSuchAlgorithmException;
 import java.net.*;
 import java.io.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class Node {
     private final Map<String, Integer> hashTable;
@@ -13,6 +16,7 @@ public class Node {
     private DatagramSocket socket;
     private static final int BUFFER_SIZE = 1024;
     public Triplet node_information;
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
 
     public Node()
     {
@@ -22,11 +26,12 @@ public class Node {
         startUDPServer();
     }
 
-    public Node(String IP_ADDR, int UDP_PORT, int NODE_ID, boolean startServer) {
+    public Node(String IP_ADDR, int UDP_PORT, int NODE_ID) {
         node_information = new Triplet(IP_ADDR, UDP_PORT, NODE_ID);
         hashTable = new ConcurrentHashMap<>();
         routingTable = new ConcurrentHashMap<>();
-        if(startServer) startUDPServer();
+        startUDPServer();
+        startPingScheduler();
     }
 
     private void startUDPServer() {
@@ -50,6 +55,15 @@ public class Node {
                 e.printStackTrace();
             }
         }).start();
+    }
+    private void startPingScheduler() {
+        scheduler.scheduleAtFixedRate(() -> {
+            try {
+                sendPingKClosest();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }, 0, 10, TimeUnit.SECONDS); // Runs every 10 seconds
     }
     private void handleIncomingPacket(DatagramPacket packet) throws IOException {
         String message = new String(packet.getData(), 0, packet.getLength());
@@ -182,30 +196,50 @@ public class Node {
         try (DatagramSocket pingSocket = new DatagramSocket()) {
             List<Triplet> KClosestNodes = findKClosestNodesToSelf(3);
             Set<Integer> unresponsiveNodes = new HashSet<>();
+            int maxRetries = 1;
 
             for (Triplet targetNodeInfo : KClosestNodes) {
-                try {
-                    // Send PING message
-                    String message = "PING" + " " + node_information.getIP_ADDR() + " " + node_information.getUDP_PORT() + " " + node_information.getNODE_ID();;
-                    byte[] buffer = message.getBytes();
-                    DatagramPacket packet = new DatagramPacket(buffer, buffer.length,
-                            InetAddress.getByName(targetNodeInfo.getIP_ADDR()), targetNodeInfo.getUDP_PORT());
-                    pingSocket.send(packet);
+                boolean isResponsive = false;
 
-                    // Wait for response
-                    pingSocket.setSoTimeout(2000); // 2-second timeout
-                    byte[] responseBuffer = new byte[1024];
-                    DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
+                for (int attempt = 1; attempt <= maxRetries; attempt++) {
+                    try {
+                        // Send PING message
+                        String message = "PING " + node_information.getIP_ADDR() + " " + node_information.getUDP_PORT() + " " + node_information.getNODE_ID();
+                        byte[] buffer = message.getBytes();
+                        DatagramPacket packet = new DatagramPacket(buffer, buffer.length,
+                                InetAddress.getByName(targetNodeInfo.getIP_ADDR()), targetNodeInfo.getUDP_PORT());
 
-                    pingSocket.receive(responsePacket);
-                    String response = new String(responsePacket.getData(), 0, responsePacket.getLength()).trim();
+                        pingSocket.send(packet);
+                        //System.out.println("Attempt " + attempt + ": Sent PING to Node ID " + targetNodeInfo.getNODE_ID());
 
-                    // Check if response is a valid PONG
-                    if (!response.equals("PONG " + targetNodeInfo.getNODE_ID())) {
-                        unresponsiveNodes.add(targetNodeInfo.getNODE_ID());
+                        // Wait for response
+                        pingSocket.setSoTimeout(2000); // 2-second timeout
+                        byte[] responseBuffer = new byte[1024];
+                        DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
+
+                        pingSocket.receive(responsePacket);
+                        String response = new String(responsePacket.getData(), 0, responsePacket.getLength()).trim();
+
+                        // Check if response is a valid PONG
+                        if (response.equals("PONG " + targetNodeInfo.getNODE_ID())) {
+                            isResponsive = true;
+                            //System.out.println("Node ID " + targetNodeInfo.getNODE_ID() + " responded with PONG.");
+                            break;
+                        } else {
+                            //System.out.println("Invalid response from Node ID: " + targetNodeInfo.getNODE_ID() + " - Retrying...");
+                        }
+
+                    } catch (SocketTimeoutException e) {
+                        //System.out.println("Attempt " + attempt + ": No response from Node ID " + targetNodeInfo.getNODE_ID());
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                        break;
                     }
-                } catch (SocketTimeoutException e) {
-                    System.out.println("No response from Node ID: " + targetNodeInfo.getNODE_ID() + " - Removing from routing table.");
+                }
+
+                // If the node never responded, mark it as unresponsive
+                if (!isResponsive) {
+                    //System.out.println("Node ID " + targetNodeInfo.getNODE_ID() + " is unresponsive after " + maxRetries + " attempts. Removing from routing table.");
                     unresponsiveNodes.add(targetNodeInfo.getNODE_ID());
                 }
             }
@@ -222,8 +256,12 @@ public class Node {
 
     private List<Triplet> sendFindNodeRequest(Triplet targetNode, int targetNodeId) {
         List<Triplet> returnedNodes = new ArrayList<>();
+        DatagramSocket findNodeSocket = null;
+
         try {
-            DatagramSocket findNodeSocket = new DatagramSocket();
+            findNodeSocket = new DatagramSocket();
+            findNodeSocket.setSoTimeout(5000); // Set 5-second timeout
+
             String message = "FIND_NODE " + targetNodeId + " " +
                     node_information.getIP_ADDR() + " " +
                     node_information.getUDP_PORT() + " " +
@@ -233,38 +271,47 @@ public class Node {
             DatagramPacket packet = new DatagramPacket(buffer, buffer.length,
                     InetAddress.getByName(targetNode.getIP_ADDR()),
                     targetNode.getUDP_PORT());
-            findNodeSocket.send(packet);
 
-            // Set timeout for response
-            findNodeSocket.setSoTimeout(5000); // 5 seconds timeout
+            try {
+                findNodeSocket.send(packet);
+                //System.out.println("Sent FIND_NODE request to " + targetNode.getIP_ADDR() + " " + targetNodeId);
 
-            // Prepare to receive response
-            byte[] responseBuffer = new byte[BUFFER_SIZE];
-            DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
-            findNodeSocket.receive(responsePacket);
+                // Prepare to receive response
+                byte[] responseBuffer = new byte[BUFFER_SIZE];
+                DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
+                findNodeSocket.receive(responsePacket); // Blocking call
 
-            String response = new String(responsePacket.getData(), 0, responsePacket.getLength());
-            findNodeSocket.close();
-
-            // Parse the response
-            if (response.startsWith("CLOSEST_NODES")) {
-                String[] parts = response.split(" ");
-                for (int i = 1; i < parts.length; i += 3) {
-                    if (i + 2 < parts.length) {
-                        String ip = parts[i];
-                        int port = Integer.parseInt(parts[i + 1]);
-                        int nodeId = Integer.parseInt(parts[i + 2]);
-                        Triplet nodeInfo = new Triplet(ip, port, nodeId);
-                        returnedNodes.add(nodeInfo);
-
-                        // Also add to routing table
-                        addToRoutingTable(nodeInfo);
+                // If response is received, parse and return nodes
+                String response = new String(responsePacket.getData(), 0, responsePacket.getLength());
+                if (response.startsWith("CLOSEST_NODES")) {
+                    String[] parts = response.split(" ");
+                    for (int i = 1; i < parts.length; i += 3) {
+                        if (i + 2 < parts.length) {
+                            String ip = parts[i];
+                            int port = Integer.parseInt(parts[i + 1]);
+                            int nodeId = Integer.parseInt(parts[i + 2]);
+                            Triplet nodeInfo = new Triplet(ip, port, nodeId);
+                            returnedNodes.add(nodeInfo);
+                            addToRoutingTable(nodeInfo);
+                        }
                     }
+                    return returnedNodes; // Successful response, return nodes
                 }
             }
+            catch (SocketTimeoutException e) {
+                //System.err.println("Timeout: No response received from " + targetNode.getIP_ADDR());
+            }
+
+            // If all retries fail, fallback mechanism
+            //System.err.println("All attempts failed. Node " + targetNode.getIP_ADDR() + " is unresponsive.");
+            removeFromRoutingTable(targetNodeId); // Fallback method (implement as needed)
 
         } catch (IOException e) {
             e.printStackTrace();
+        } finally {
+            if (findNodeSocket != null && !findNodeSocket.isClosed()) {
+                findNodeSocket.close();
+            }
         }
 
         return returnedNodes;
@@ -410,7 +457,7 @@ public class Node {
             // Keep only the k closest nodes
             if (closestNodes.size() > K_BUCKET_SIZE) {
                 closestNodes.sort(Comparator.comparingInt(node -> targetNodeId ^ node.getNODE_ID()));
-                closestNodes = closestNodes.subList(0, K_BUCKET_SIZE);
+                //closestNodes = closestNodes.subList(0, K_BUCKET_SIZE);
             }
         }
 
@@ -582,6 +629,8 @@ public class Node {
         } catch (InterruptedException e) {
             e.printStackTrace();
         }
+
+        scheduler.shutdown();
 
         if (socket != null && !socket.isClosed()) {
             socket.close();

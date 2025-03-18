@@ -67,7 +67,7 @@ public class NetworkSimulator {
             UDP_PORT = findAvailablePort(UDP_PORT+1);
         }
 
-        Node newNode = new Node(IP, UDP_PORT, NODE_ID, true);
+        Node newNode = new Node(IP, UDP_PORT, NODE_ID);
         nodes.add(newNode);
 
         // Allow some time for the UDP server to start
@@ -147,11 +147,13 @@ public class NetworkSimulator {
         // Delete the node
         nodes.removeIf(node -> node.getNodeInformation().getNODE_ID() == NODE_ID);
 
-        refreshRoutingTables();
+        /*Removal of nodes is being adjusted automatically now instead of
+        refreshing every node's hash table whenever some random nodes left the network
+        refreshRoutingTables();*/
 
         // Redistribute Hash Table
         Map<String, Integer> table = nodeToDelete.getHashTable();
-        System.out.println("Node to delete hash table: " + table);
+        System.out.println("Node " + NODE_ID + " to delete hash table: " + table);
 
         for (Map.Entry<String, Integer> entry : table.entrySet()) {
             int key = entry.getValue();
@@ -170,25 +172,32 @@ public class NetworkSimulator {
         // Start from any node
         Node startNode = nodes.get(0);
 
-        // Use the node lookup to find the closest nodes to the key
+        // Use node lookup to find the closest nodes
         List<Triplet> closestNodes = startNode.findNode(key);
 
-        if (!closestNodes.isEmpty()) {
-            Triplet closestNodeInfo = closestNodes.get(0);
+        if (closestNodes.isEmpty()) {
+            System.out.println("No nodes found in the network to store the key.");
+            return;
+        }
 
+        boolean storedKey = false;
+
+        for (Triplet nodeInfo : closestNodes) {
             Node targetNode = nodes.stream()
-                    .filter(n -> n.getNodeInformation().getNODE_ID() == closestNodeInfo.getNODE_ID())
+                    .filter(n -> n.getNodeInformation().getNODE_ID() == nodeInfo.getNODE_ID())
                     .findFirst()
                     .orElse(null);
 
             if (targetNode != null) {
                 targetNode.storeKey(key);
+                storedKey = true;
                 System.out.println("Key " + key + " added to node " + targetNode.getNodeInformation().getNODE_ID());
-            } else {
-                System.out.println("Error: Closest node not found in node list.");
+                break;
             }
-        } else {
-            System.out.println("No nodes found in the network to store the key.");
+        }
+
+        if (!storedKey) {
+            System.out.println("No available node found to store key: " + key);
         }
     }
 
@@ -266,6 +275,13 @@ public class NetworkSimulator {
                     int index = random.nextInt(nodes.size());
                     int nodeId = nodes.get(index).getNodeInformation().getNODE_ID();
                     removeNode(nodeId);
+
+                   /* try {
+                        Thread.sleep(5000); // Sleep for 1 second (1000 milliseconds)
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt(); // Restore the interrupted status
+                        System.err.println("Thread was interrupted during sleep");
+                    }*/
                 }
             }
 
