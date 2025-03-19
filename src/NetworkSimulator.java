@@ -6,7 +6,6 @@ public class NetworkSimulator {
     private final List<Node> nodes;
     private final int NUM_NODES = 30;
     private final Random random = new Random();
-    private static final int K_BUCKET_SIZE = 3;
 
     public NetworkSimulator() {
         nodes = new ArrayList<>();

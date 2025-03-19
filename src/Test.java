@@ -5,7 +5,7 @@ public class Test {
 
         try {
             // Section 1: Network Initialization
-            System.out.println("\n=== 1. NETWORK INITIALIZATION ===");
+            /*System.out.println("\n=== 1. NETWORK INITIALIZATION ===");
             NetworkSimulator simulator = new NetworkSimulator();
 
             // Create an initial network with nodes spread across the ID space
@@ -195,7 +195,112 @@ public class Test {
             System.out.println("\n=== 10. CLEAN SHUTDOWN ===");
             System.out.println("Shutting down network simulators...");
             simulator.shutdown();
-            emptySimulator.shutdown();
+            emptySimulator.shutdown();*/
+
+            System.out.println("\n=== 11. HASH TABLE CAPACITY AND DISTRIBUTION TEST ===");
+
+            // Create a new simulator with a smaller MAX_TABLE_SIZE for testing
+            System.out.println("Creating a new simulator with small capacity nodes...");
+            NetworkSimulator capacitySimulator = new NetworkSimulator(); // Assuming constructor accepts max table size
+
+            // Add a few nodes with small capacity
+            System.out.println("Adding nodes with small storage capacity...");
+            capacitySimulator.addNode("127.0.0.1", 9001, 10);  // Node ID 10
+            capacitySimulator.addNode("127.0.0.1", 9002, 30);  // Node ID 50
+            capacitySimulator.addNode("127.0.0.1", 9003, 90);  // Node ID 90
+            capacitySimulator.addNode("127.0.0.1", 9003, 520);  // Node ID 90
+
+            // Allow time for node discovery
+            System.out.println("Waiting for nodes to discover each other...");
+            Thread.sleep(2000);
+
+            for (Node node : capacitySimulator.getNodes()) {
+                System.out.println("\nRouting table for Node ID: " + node.getNodeInformation().getNODE_ID());
+                node.displayRoutingTable();
+            }
+
+            // Test filling up the first node's capacity
+            System.out.println("\nFilling up first node's capacity...");
+
+            // Add keys that will hash close to the first node's ID
+            for (int i = 0; i < 50; i++) {
+                System.out.println("Adding key: " + 10);
+                capacitySimulator.addKey(1+i);
+            }
+
+            capacitySimulator.displayNetworkState();
+
+            // Display hash tables to verify distribution
+            System.out.println("\nHash tables after adding keys to first node:");
+            for (Node node : capacitySimulator.getNodes()) {
+                System.out.println("\nNode ID: " + node.getNodeInformation().getNODE_ID() + " Hash Table:");
+                node.displayHashTable();
+            }
+
+            // Test lookup for all keys
+            System.out.println("\nVerifying all keys are still accessible:");
+            for (int i = 0; i < 50; i++) {
+                int foundAtNode = capacitySimulator.findKey(1+i);
+                System.out.println("Key " + (i+1) + " lookup result: " +
+                        (foundAtNode != -1 ? "Found at Node " + foundAtNode : "Not found"));
+            }
+
+            // Add more nodes to test redistribution
+            System.out.println("\nAdding more nodes to test redistribution...");
+            capacitySimulator.addNode("127.0.0.1", 9104, 30);  // Node ID 30
+            capacitySimulator.addNode("127.0.0.1", 9105, 70);  // Node ID 70
+
+            // Allow time for integration
+            Thread.sleep(2000);
+
+
+            // Try to add more keys which should trigger redistribution
+            System.out.println("\nAttempting to add more keys to trigger redistribution...");
+            for (int i = 50; i < 100; i++) {
+                System.out.println("Adding key: " + (40+i));
+                capacitySimulator.addKey(40+i);
+            }
+
+            capacitySimulator.displayNetworkState();
+
+            // Display updated hash tables
+            System.out.println("\nHash tables after redistribution:");
+            for (Node node : capacitySimulator.getNodes()) {
+                System.out.println("\nNode ID: " + node.getNodeInformation().getNODE_ID() + " Hash Table:");
+                node.displayHashTable();
+            }
+
+            // Test extreme case: make all nodes full
+            System.out.println("\nTesting extreme case: all nodes reaching capacity...");
+
+            // Add many more keys to fill all nodes
+            for (int i = 0; i < 100; i++) {
+                int key = 1000 + i;
+                capacitySimulator.addKey(key);
+                System.out.println("Adding key: " + key);
+
+                // Every 10 keys, display the network state
+                if (i % 10 == 0 && i > 0) {
+                    capacitySimulator.displayNetworkState();
+                }
+            }
+
+
+            capacitySimulator.displayNetworkState();
+
+            // Final display of hash tables
+            System.out.println("\nFinal hash tables after capacity test:");
+            for (Node node : capacitySimulator.getNodes()) {
+                System.out.println("\nNode ID: " + node.getNodeInformation().getNODE_ID() +
+                        " Hash Table Size: " + node.getHashTable().size());
+                node.displayHashTable();
+            }
+
+            // Shutdown the capacity simulator
+            System.out.println("\nShutting down capacity simulator...");
+            capacitySimulator.shutdown();
+
+            System.out.println("\n=== HASH TABLE CAPACITY TEST COMPLETED ===");
 
             System.out.println("\n=== COMPREHENSIVE DHT NETWORK TEST COMPLETED SUCCESSFULLY ===");
 

@@ -11,20 +11,13 @@ import java.util.concurrent.TimeUnit;
 public class Node {
     private final Map<String, Integer> hashTable;
     private final Map<Integer, List<Triplet>> routingTable;
+    public Triplet node_information;
+    private DatagramSocket socket;
     private static final int K_BUCKET_SIZE = 3;
     private static final int BUCKET_COUNT = 32;
-    private DatagramSocket socket;
     private static final int BUFFER_SIZE = 1024;
-    public Triplet node_information;
+    private static final int MAX_TABLE_SIZE = 50;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-
-    public Node()
-    {
-        node_information = new Triplet();
-        hashTable = new ConcurrentHashMap<>();
-        routingTable = new ConcurrentHashMap<>();
-        startUDPServer();
-    }
 
     public Node(String IP_ADDR, int UDP_PORT, int NODE_ID) {
         node_information = new Triplet(IP_ADDR, UDP_PORT, NODE_ID);
@@ -63,7 +56,7 @@ public class Node {
             } catch (Exception e) {
                 e.printStackTrace();
             }
-        }, 0, 10, TimeUnit.SECONDS); // Runs every 10 seconds
+        }, 0, 30, TimeUnit.SECONDS); // Runs every 10 seconds
     }
     private void handleIncomingPacket(DatagramPacket packet) throws IOException {
         String message = new String(packet.getData(), 0, packet.getLength());
@@ -87,16 +80,6 @@ public class Node {
             String response = "PONG" + " " + node_information.getIP_ADDR() + " " + node_information.getUDP_PORT() + " " + node_information.getNODE_ID();
             DatagramPacket pongPacket = new DatagramPacket(response.getBytes(), response.length(), senderAddress, senderPort);
             socket.send(pongPacket);
-        } else if (message.startsWith("PONG")) {
-
-            String[] parts = message.split(" ");
-            String incomingIP = parts[1];
-            int incomingPort = Integer.parseInt(parts[2]);
-            int incomingNodeID = Integer.parseInt(parts[3]);
-
-            // Create a new Node object with the received information
-            Triplet receivedNodeInfo = new Triplet(incomingIP, incomingPort, incomingNodeID);
-            addToRoutingTable(receivedNodeInfo);
         }
         // Add this to your handleIncomingPacket method
         else if (message.startsWith("FIND_NODE")) {
@@ -167,6 +150,45 @@ public class Node {
                 socket.send(responsePacket);
             }
         }
+        else if (message.startsWith("STORE_KEY")) {
+            String[] parts = message.split(" ");
+            int key = Integer.parseInt(parts[1]);
+            String callerIP = parts[2];
+            int callerPort = Integer.parseInt(parts[3]);
+            int callerNodeID = Integer.parseInt(parts[4]);
+
+            Triplet callerNodeInfo = new Triplet(callerIP, callerPort, callerNodeID);
+            addToRoutingTable(callerNodeInfo);
+
+            boolean stored = storeKey(key);
+
+            if(stored) {
+                String response = "STORED_KEY " + key + " NODE_ID " + node_information.getNODE_ID();
+                DatagramPacket responsePacket = new DatagramPacket(
+                        response.getBytes(), response.length(),
+                        senderAddress, senderPort
+                );
+                socket.send(responsePacket);
+            }
+            else {
+                // If we can't store the key, send our k-closest nodes
+                List<Triplet> closestNodes = findKClosestNodesToSelf(K_BUCKET_SIZE);
+
+                StringBuilder responseBuilder = new StringBuilder("CLOSEST_NODES");
+                for (Triplet node : closestNodes) {
+                    responseBuilder.append(" ").append(node.getIP_ADDR())
+                            .append(" ").append(node.getUDP_PORT())
+                            .append(" ").append(node.getNODE_ID());
+                }
+
+                String response = responseBuilder.toString();
+                DatagramPacket responsePacket = new DatagramPacket(
+                        response.getBytes(), response.length(),
+                        senderAddress, senderPort
+                );
+                socket.send(responsePacket);
+            }
+        }
         else if (message.startsWith("GOODBYE")) {
             String[] parts = message.split(" ");
             String callerIP = parts[1];
@@ -186,7 +208,18 @@ public class Node {
             DatagramPacket packet = new DatagramPacket(buffer, buffer.length,
                     InetAddress.getByName(targetNode.getNodeInformation().getIP_ADDR()), targetNode.getNodeInformation().getUDP_PORT());
             pingSocket.send(packet);
-            pingSocket.close();
+
+            pingSocket.setSoTimeout(2000); // 2-second timeout
+            byte[] responseBuffer = new byte[1024];
+            DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
+
+            pingSocket.receive(responsePacket);
+            String response = new String(responsePacket.getData(), 0, responsePacket.getLength()).trim();
+
+            // Check if response is a valid PONG
+            if (response.equals("PONG " + targetNode.getNodeInformation().getIP_ADDR() + " " + targetNode.getNodeInformation().getUDP_PORT() + " " + targetNode.getNodeInformation().getNODE_ID())) {
+                addToRoutingTable(targetNode.getNodeInformation());
+            }
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -317,7 +350,7 @@ public class Node {
         return returnedNodes;
     }
 
-    public int sendFindKey(Triplet targetNode, int searchKey) {
+    private int sendFindKey(Triplet targetNode, int searchKey) {
         try {
             DatagramSocket findKeySocket = new DatagramSocket();
             String message = "FIND_KEY " + searchKey + " " + node_information.getIP_ADDR() + " " +
@@ -357,7 +390,126 @@ public class Node {
         }
     }
 
-    public void sendGoodbyeMessage(Triplet targetNode) {
+    private boolean sendSplitHashTableRequest() {
+        try {
+            Set<Integer> visitedNodes = new HashSet<>();
+            visitedNodes.add(node_information.getNODE_ID());
+
+            List<Triplet> closestNodes = findKClosestNodesToSelf(K_BUCKET_SIZE);
+            Queue<Triplet> nodesToTry = new LinkedList<>(closestNodes);
+
+            // Create a list of keys to distribute
+            List<String> keysToDistribute = new ArrayList<>();
+            int keysToSplit = hashTable.size() / 2;
+            List<String> allKeys = new ArrayList<>(hashTable.keySet());
+            Collections.shuffle(allKeys);
+            for (int i = 0; i < keysToSplit && i < allKeys.size(); i++) {
+                keysToDistribute.add(allKeys.get(i));
+            }
+
+            // Map to track which keys have been tried with which nodes
+            Map<String, Set<Integer>> keyNodeAttempts = new HashMap<>();
+            for (String key : keysToDistribute) {
+                keyNodeAttempts.put(key, new HashSet<>());
+            }
+
+            DatagramSocket splitHashTableSocket = new DatagramSocket();
+            splitHashTableSocket.setSoTimeout(500);
+
+
+            System.out.println("Keys to Distributed: "+keysToDistribute);
+
+            // Continue until we've distributed all keys or exhausted all nodes
+            while (!nodesToTry.isEmpty() && !keysToDistribute.isEmpty()) {
+                Triplet targetNodeInfo = nodesToTry.poll();
+
+                if (visitedNodes.contains(targetNodeInfo.getNODE_ID())) {
+                    continue;
+                }
+
+                visitedNodes.add(targetNodeInfo.getNODE_ID());
+
+                // Try each key with this node until one succeeds or all fail
+                Iterator<String> keyIterator = keysToDistribute.iterator();
+                while (keyIterator.hasNext()) {
+                    String hash = keyIterator.next();
+                    Set<Integer> triedNodes = keyNodeAttempts.get(hash);
+
+                    // Skip if we've already tried this key with this node
+                    if (triedNodes.contains(targetNodeInfo.getNODE_ID())) {
+                        continue;
+                    }
+
+                    triedNodes.add(targetNodeInfo.getNODE_ID());
+                    Integer key = hashTable.get(hash);
+
+                    // Send STORE_KEY request
+                    String message = "STORE_KEY " + key + " " + node_information.getIP_ADDR() + " " +
+                            node_information.getUDP_PORT() + " " + node_information.getNODE_ID();
+                    byte[] buffer = message.getBytes();
+
+                    DatagramPacket packet = new DatagramPacket(buffer, buffer.length,
+                            InetAddress.getByName(targetNodeInfo.getIP_ADDR()),
+                            targetNodeInfo.getUDP_PORT());
+
+                    splitHashTableSocket.send(packet);
+
+                    try {
+                        byte[] responseBuffer = new byte[BUFFER_SIZE];
+                        DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
+                        splitHashTableSocket.receive(responsePacket);
+
+                        String response = new String(responsePacket.getData(), 0, responsePacket.getLength());
+                        System.out.println("Split response: "+response);
+                        if (response.startsWith("STORED_KEY")) {
+                            // Key stored successfully
+                            keyIterator.remove();
+                            hashTable.remove(hash);
+                            keyNodeAttempts.remove(hash);
+                            break;  // Try next node with remaining keys
+                        }
+                        else if (response.startsWith("CLOSEST_NODES")) {
+                            // Process closest nodes response
+                            String[] parts = response.split(" ");
+                            System.out.print("CLOSEST NODES SPLITTT: ");
+                            for (int i = 1; i < parts.length; i += 3) {
+                                if (i + 2 < parts.length) {
+                                    String ip = parts[i];
+                                    int port = Integer.parseInt(parts[i + 1]);
+                                    int nodeId = Integer.parseInt(parts[i + 2]);
+                                    System.out.println(port+" "+nodeId);
+
+                                    if (!visitedNodes.contains(nodeId)) {
+                                        Triplet nodeInfo = new Triplet(ip, port, nodeId);
+                                        nodesToTry.add(nodeInfo);
+                                        addToRoutingTable(nodeInfo);
+                                    }
+                                }
+                            }
+                        }
+                    } catch (SocketTimeoutException e) {
+                        System.err.println("Timeout: No response from " + targetNodeInfo.getIP_ADDR());
+                    }
+                }
+            }
+
+            splitHashTableSocket.close();
+
+            if (!keysToDistribute.isEmpty()) {
+                System.err.println("Network storage capacity is exhausted. No space left to store keys.");
+                System.err.println("Keys remaining: " + keysToDistribute.size() +
+                        ", Nodes tried: " + visitedNodes.size());
+                return false;
+            }
+
+            return true;
+        } catch (IOException e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    private void sendGoodbyeMessage(Triplet targetNode) {
         try {
             DatagramSocket goodbyeSocket = new DatagramSocket();
             String message = "GOODBYE " + node_information.getIP_ADDR() + " " +
@@ -487,10 +639,26 @@ public class Node {
         // If we've queried all nodes and didn't find the key
         return -1;
     }
-    public void storeKey(int key)
+    public boolean storeKey(int key)
     {
+        if(isFull())
+        {
+            System.out.println("Node ID " + node_information.getNODE_ID() + " is full");
+            boolean possible = sendSplitHashTableRequest();
+            if(!possible) {
+                return false;
+            }
+        }
+
         String hash = generateSHA1(String.valueOf(key));
         hashTable.put(hash, key);
+
+        return true;
+    }
+
+    public boolean isFull()
+    {
+        return hashTable.size() >= MAX_TABLE_SIZE;
     }
 
     public void addToRoutingTable(Triplet nodeInfo) {
