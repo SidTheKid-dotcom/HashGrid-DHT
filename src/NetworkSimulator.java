@@ -196,7 +196,7 @@ public class NetworkSimulator {
         }
 
         if (!storedKey) {
-            System.out.println("No available node found to store key: " + key);
+            System.err.println("No available node found to store key: " + key);
         }
     }
 

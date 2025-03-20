@@ -13,6 +13,8 @@ public class Node {
     private final Map<Integer, List<Triplet>> routingTable;
     public Triplet node_information;
     private DatagramSocket socket;
+
+    private boolean isLocked = false;
     private static final int K_BUCKET_SIZE = 3;
     private static final int BUCKET_COUNT = 32;
     private static final int BUFFER_SIZE = 1024;
@@ -396,7 +398,13 @@ public class Node {
             visitedNodes.add(node_information.getNODE_ID());
 
             List<Triplet> closestNodes = findKClosestNodesToSelf(K_BUCKET_SIZE);
-            Queue<Triplet> nodesToTry = new LinkedList<>(closestNodes);
+
+            // Keep track of available nodes for round-robin distribution
+            List<Triplet> availableNodes = new ArrayList<>(closestNodes);
+            if (availableNodes.isEmpty()) {
+                System.err.println("No nodes available for distribution");
+                return false;
+            }
 
             // Create a list of keys to distribute
             List<String> keysToDistribute = new ArrayList<>();
@@ -407,104 +415,126 @@ public class Node {
                 keysToDistribute.add(allKeys.get(i));
             }
 
-            // Map to track which keys have been tried with which nodes
-            Map<String, Set<Integer>> keyNodeAttempts = new HashMap<>();
-            for (String key : keysToDistribute) {
-                keyNodeAttempts.put(key, new HashSet<>());
-            }
+            System.out.println("Keys to Distribute: " + keysToDistribute.size() + " keys");
 
             DatagramSocket splitHashTableSocket = new DatagramSocket();
-            splitHashTableSocket.setSoTimeout(500);
+            splitHashTableSocket.setSoTimeout(1000);
 
+            isLocked = true;
 
-            System.out.println("Keys to Distributed: "+keysToDistribute);
+            // Track successfully stored keys
+            List<String> successfullyStoredKeys = new ArrayList<>();
+
+            // Track nodes that have been found to be unreachable
+            Set<Integer> unreachableNodes = new HashSet<>();
+
+            // Current node index for round-robin
+            int currentNodeIndex = 0;
 
             // Continue until we've distributed all keys or exhausted all nodes
-            while (!nodesToTry.isEmpty() && !keysToDistribute.isEmpty()) {
-                Triplet targetNodeInfo = nodesToTry.poll();
+            while (!keysToDistribute.isEmpty() && !availableNodes.isEmpty()) {
+                // Remove unreachable nodes from available nodes
+                availableNodes.removeIf(node -> unreachableNodes.contains(node.getNODE_ID()));
 
-                if (visitedNodes.contains(targetNodeInfo.getNODE_ID())) {
+                if (availableNodes.isEmpty()) {
+                    System.err.println("Node: " + node_information.getNODE_ID() + " has run out of available nodes to distribute keys");
+                    break;
+                }
+
+                // Get the next available node in round-robin fashion
+                currentNodeIndex = currentNodeIndex % availableNodes.size();
+                Triplet targetNodeInfo = availableNodes.get(currentNodeIndex);
+
+                System.out.println("Node: "+ node_information.getNODE_ID() + " Send split to node (ID: " +
+                        targetNodeInfo.getNODE_ID() + ")");
+
+                // Get the next key to distribute
+                String hash = keysToDistribute.get(0);
+                Integer key = hashTable.get(hash);
+
+                if (key == null) {
+                    // Key no longer exists in hash table, remove from distribution list
+                    keysToDistribute.remove(0);
                     continue;
                 }
 
-                visitedNodes.add(targetNodeInfo.getNODE_ID());
+                // Send STORE_KEY request
+                String message = "STORE_KEY " + key + " " + node_information.getIP_ADDR() + " " +
+                        node_information.getUDP_PORT() + " " + node_information.getNODE_ID();
+                byte[] buffer = message.getBytes();
 
-                // Try each key with this node until one succeeds or all fail
-                Iterator<String> keyIterator = keysToDistribute.iterator();
-                while (keyIterator.hasNext()) {
-                    String hash = keyIterator.next();
-                    Set<Integer> triedNodes = keyNodeAttempts.get(hash);
+                DatagramPacket packet = new DatagramPacket(buffer, buffer.length,
+                        InetAddress.getByName(targetNodeInfo.getIP_ADDR()),
+                        targetNodeInfo.getUDP_PORT());
 
-                    // Skip if we've already tried this key with this node
-                    if (triedNodes.contains(targetNodeInfo.getNODE_ID())) {
-                        continue;
-                    }
-
-                    triedNodes.add(targetNodeInfo.getNODE_ID());
-                    Integer key = hashTable.get(hash);
-
-                    // Send STORE_KEY request
-                    String message = "STORE_KEY " + key + " " + node_information.getIP_ADDR() + " " +
-                            node_information.getUDP_PORT() + " " + node_information.getNODE_ID();
-                    byte[] buffer = message.getBytes();
-
-                    DatagramPacket packet = new DatagramPacket(buffer, buffer.length,
-                            InetAddress.getByName(targetNodeInfo.getIP_ADDR()),
-                            targetNodeInfo.getUDP_PORT());
-
+                try {
                     splitHashTableSocket.send(packet);
 
-                    try {
-                        byte[] responseBuffer = new byte[BUFFER_SIZE];
-                        DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
-                        splitHashTableSocket.receive(responsePacket);
+                    byte[] responseBuffer = new byte[BUFFER_SIZE];
+                    DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
+                    splitHashTableSocket.receive(responsePacket);
 
-                        String response = new String(responsePacket.getData(), 0, responsePacket.getLength());
-                        System.out.println("Split response: "+response);
-                        if (response.startsWith("STORED_KEY")) {
-                            // Key stored successfully
-                            keyIterator.remove();
-                            hashTable.remove(hash);
-                            keyNodeAttempts.remove(hash);
-                            break;  // Try next node with remaining keys
-                        }
-                        else if (response.startsWith("CLOSEST_NODES")) {
-                            // Process closest nodes response
-                            String[] parts = response.split(" ");
-                            System.out.print("CLOSEST NODES SPLITTT: ");
-                            for (int i = 1; i < parts.length; i += 3) {
-                                if (i + 2 < parts.length) {
-                                    String ip = parts[i];
-                                    int port = Integer.parseInt(parts[i + 1]);
-                                    int nodeId = Integer.parseInt(parts[i + 2]);
-                                    System.out.println(port+" "+nodeId);
+                    String response = new String(responsePacket.getData(), 0, responsePacket.getLength());
 
-                                    if (!visitedNodes.contains(nodeId)) {
-                                        Triplet nodeInfo = new Triplet(ip, port, nodeId);
-                                        nodesToTry.add(nodeInfo);
-                                        addToRoutingTable(nodeInfo);
-                                    }
+                    if (response.startsWith("STORED_KEY")) {
+                        // Key stored successfully
+                        successfullyStoredKeys.add(hash);
+                        keysToDistribute.remove(0);
+                        // Move to next node for next key
+                        currentNodeIndex++;
+                    }
+                    else if (response.startsWith("CLOSEST_NODES")) {
+                        // Process closest nodes response to find more potential nodes
+                        String[] parts = response.split(" ");
+                        System.out.print("CLOSEST NODES SPLIT: ");
+
+                        for (int i = 1; i < parts.length; i += 3) {
+                            if (i + 2 < parts.length) {
+                                String ip = parts[i];
+                                int port = Integer.parseInt(parts[i + 1]);
+                                int nodeId = Integer.parseInt(parts[i + 2]);
+                                System.out.println(port + " " + nodeId);
+
+                                if (!visitedNodes.contains(nodeId) && !unreachableNodes.contains(nodeId)) {
+                                    Triplet nodeInfo = new Triplet(ip, port, nodeId);
+                                    availableNodes.add(nodeInfo);
+                                    visitedNodes.add(nodeId);
+                                    addToRoutingTable(nodeInfo);
                                 }
                             }
                         }
-                    } catch (SocketTimeoutException e) {
-                        System.err.println("Timeout: No response from " + targetNodeInfo.getIP_ADDR());
+                        // Try the next node with the same key
+                        currentNodeIndex++;
                     }
+                } catch (SocketTimeoutException e) {
+                    System.err.println("Timeout: No response from " + targetNodeInfo.getIP_ADDR() + " " + targetNodeInfo.getNODE_ID());
+                    // Mark this node as unreachable
+                    unreachableNodes.add(targetNodeInfo.getNODE_ID());
+                    // Try the next node with the same key
+                    currentNodeIndex++;
                 }
             }
 
-            splitHashTableSocket.close();
+            // Remove successfully stored keys from our hash table
+            for (String hash : successfullyStoredKeys) {
+                hashTable.remove(hash);
+            }
 
-            if (!keysToDistribute.isEmpty()) {
-                System.err.println("Network storage capacity is exhausted. No space left to store keys.");
-                System.err.println("Keys remaining: " + keysToDistribute.size() +
-                        ", Nodes tried: " + visitedNodes.size());
-                return false;
+            splitHashTableSocket.close();
+            isLocked = false;
+
+            if(keysToDistribute.size() == keysToSplit) {
+                System.err.println("Cannot split keys from node: "+node_information.getNODE_ID());
+            }
+            // Atleast a few keys were distributed
+            else if (!keysToDistribute.isEmpty()) {
+                return true;
             }
 
             return true;
         } catch (IOException e) {
             e.printStackTrace();
+            isLocked = false;
             return false;
         }
     }
@@ -641,6 +671,11 @@ public class Node {
     }
     public boolean storeKey(int key)
     {
+        if(hashTable.containsKey(key)) {
+            System.out.println("Duplicate key detected, key already stored in table");
+            return false;
+        }
+
         if(isFull())
         {
             System.out.println("Node ID " + node_information.getNODE_ID() + " is full");
@@ -650,10 +685,108 @@ public class Node {
             }
         }
 
+        if(isLocked) {
+            return storeKeyInClosestNode(key);
+        }
+
         String hash = generateSHA1(String.valueOf(key));
         hashTable.put(hash, key);
 
         return true;
+    }
+
+    private boolean storeKeyInClosestNode(int key) {
+        // Find the closest nodes to the key
+        List<Triplet> closestNodes = findKClosestNodesForKeyFromSelf(key, K_BUCKET_SIZE);
+
+        if (closestNodes.isEmpty()) {
+            System.out.println("No available nodes to store key " + key);
+            return false;
+        }
+
+        // Set to track nodes we've already tried
+        Set<Integer> triedNodes = new HashSet<>();
+        triedNodes.add(node_information.getNODE_ID()); // Add self to tried nodes
+
+        // Queue of nodes to try
+        Queue<Triplet> nodesToTry = new LinkedList<>(closestNodes);
+
+        while (!nodesToTry.isEmpty()) {
+            Triplet targetNode = nodesToTry.poll();
+
+            // Skip if we've already tried this node
+            if (triedNodes.contains(targetNode.getNODE_ID())) {
+                continue;
+            }
+
+            triedNodes.add(targetNode.getNODE_ID());
+
+            try {
+                DatagramSocket storeSocket = new DatagramSocket();
+                storeSocket.setSoTimeout(1000); // 5 second timeout
+
+                // Prepare STORE_KEY message
+                String message = "STORE_KEY " + key + " " +
+                        node_information.getIP_ADDR() + " " +
+                        node_information.getUDP_PORT() + " " +
+                        node_information.getNODE_ID();
+
+                byte[] buffer = message.getBytes();
+                DatagramPacket packet = new DatagramPacket(
+                        buffer, buffer.length,
+                        InetAddress.getByName(targetNode.getIP_ADDR()),
+                        targetNode.getUDP_PORT()
+                );
+
+                // Send the request
+                storeSocket.send(packet);
+
+                // Wait for response
+                byte[] responseBuffer = new byte[BUFFER_SIZE];
+                DatagramPacket responsePacket = new DatagramPacket(responseBuffer, responseBuffer.length);
+
+                try {
+                    storeSocket.receive(responsePacket);
+                    String response = new String(responsePacket.getData(), 0, responsePacket.getLength());
+
+                    // Process the response
+                    if (response.startsWith("STORED_KEY")) {
+                        storeSocket.close();
+                        return true; // Key stored successfully
+                    }
+                    else if (response.startsWith("CLOSEST_NODES")) {
+                        // Add returned nodes to our queue
+                        String[] parts = response.split(" ");
+                        for (int i = 1; i < parts.length; i += 3) {
+                            if (i + 2 < parts.length) {
+                                String ip = parts[i];
+                                int port = Integer.parseInt(parts[i + 1]);
+                                int nodeId = Integer.parseInt(parts[i + 2]);
+
+                                if (!triedNodes.contains(nodeId)) {
+                                    Triplet nodeInfo = new Triplet(ip, port, nodeId);
+                                    nodesToTry.add(nodeInfo);
+                                    addToRoutingTable(nodeInfo);
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (SocketTimeoutException e) {
+                    System.out.println("No response from node ID " + targetNode.getNODE_ID());
+                    removeFromRoutingTable(targetNode.getNODE_ID()); // Remove unresponsive node
+                }
+
+                storeSocket.close();
+
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        // If we've tried all nodes and couldn't store the key
+        System.out.println("Cannot store key " + key + " anywhere in the network");
+        return false;
     }
 
     public boolean isFull()
